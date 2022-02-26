@@ -1,0 +1,382 @@
+---
+title: "Zaawansowana eksploracja danych projekt 1"
+author: "Wojciech Szczepaniak"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: 
+      collapsed: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    theme: cerulean
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Wstęp
+
+Zbiory danych zawierały bardzo dużo atrybutów, zebrane zostały na przestrzeni wielu lat i przestawiały interesujące dane. Dzięki analizie udało ustalić, że wiele atrybutów znacząco koreluje z cenami złota i na ich podstawie można stworzyć model regresji, który z dużą skutecznością jest w stanie przewidzieć ceny złota.\
+
+Ostatecznie regresor został wytrenowany na podstawie poniższych danych:\
+S&P:\
+  - Divident\
+  - Earnings\
+  - CPI\
+  - Real.Divident\
+Światowy wskaźnik rozwoju:\
+  -GDP (current US dollar)\
+
+Wytrenowany model dla zbioru testowego przyjął następujące wartości miar:\
+- RMSE    = 26.35187\
+- MAE     = 13.19214\
+
+Najważniejszymi atrybutami dla trenowanego modelu okazało się:
+CPI - model RandomForest\
+GDP - model RandomForest z dobranymi parametrami
+
+```{r wstep}
+
+```
+
+# Biblioteki
+
+Wykorzystane biblioteki:\
+```{r biblioteki, message=FALSE, warning=FALSE}
+library(readxl)
+library(corrplot)
+library(caret)
+library(dplyr)
+library(tidyr)
+library(plotly)
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+library(patchwork)
+library(hrbrthemes)
+library(DT)
+library(gganimate)
+library(gifski)
+library(randomForest)
+library(Metrics)
+```
+
+# Zapewnienie powtarzalności
+
+Zapewnienie powtarzalności wyników w projekcie uzyskano dzięki ustawieniu ziarna generatora liczb losowych.
+
+```{r powtarzalnosc}
+set.seed(42)
+```
+
+# Wczytywanie danych
+
+W przypadku bitcoina wykorzystany zostanie zbiór danych zawierających jego cenę w danym dniu wyrażoną w dolarach.
+
+```{r dane}
+INDI  <- read_xlsx("Data pack/World_Development_Indicators.xlsx", na = '..')
+RATES <- read.csv("Data pack/CurrencyExchangeRates.csv")
+GOLD <- read.csv("Data pack/Gold prices.csv")
+COMP <- read.csv("Data Pack/S&P Composite.csv")
+MKPRU <- read.csv("Data pack/Bitcoin/BCHAIN-MKPRU.csv")
+```
+
+# Podsumowanie danych
+
+## Światowy wskaźnik rozwoju - INDI
+Spośród wielu krajów wybrać można by kraje posiadających największe PKB kolejno: Stany Zjednoczone, Chiny, Japonia, Niemcy oraz Wielka Brytania czy kraje posiadających najwięcej rezerw złota w tonach: Stany zjednoczone, Niemcy Włochy, Francja oraz Rosja. Kraje te powinny wywierać największy wpływ na ceny surowców dostępnych na całym świecie. Ostatecznie wybrane zostały statystyki dla całego świata, dzięki czemu naraz ujęte w analizie zostaną zarówno największe mocarstwa, jak i te drobniejsze kraje.
+
+```{r presummary INDI}
+INDI <- INDI %>% 
+  filter(`Country Name` %in% c("World"))
+```
+
+Można zauważyć, że zebrane dane w wielu latach posiadają bardzo dużą ilość brakujących wartości. Uzupełnianie brakujących wartości nie byłoby proste i mogłoby spowodować zakłamanie wyników, dlatego po przekształceniu zbioru zostały usunięte rekordy, którym brakowało danych.
+```{r summary INDI}
+INDI <- INDI %>% 
+  select(-c("Country Name","Country Code")) %>%
+  gather("Year", "Value", -c("Series Name", "Series Code")) %>%
+  mutate(Year = substr(Year, 1, 4), `Series Name` = gsub("\\$", " dollar", `Series Name`)) 
+```
+
+Zbiór danych dodatkowo został przekształcony, aby ułatwić pracę nad nim i uzyskać przejrzystość danych
+```{r head INDI}
+INDI <- INDI %>%
+  drop_na()
+summary(INDI)
+```
+## Kursy walut -  RATES
+W przypadku kursów wymiany walut dane zbierane były od 1995 do 2018 roku. Można zauważyć, że prawie wszystkie z podanych walut mają wartości puste a wiele z nich nawet powyżej 4000 pustych pomiarów. Może to wynikać z dynamiki geopolitycznej krajów. Na świecie na przestrzeni lat wiele walut było wprowadzonych do obiegu, jak i z niego wyprowadzanych. Możliwe też, że po prostu zbiór danych nie jest pełny. Ze względu na dużą ilość wartości pustych uzupełnianie ich o wartości bazujące na poprzedzających/następujących wartościach mogłoby spowodować zakłamanie badanych wartości. Natomiast usunięcie wartości pustych powoduje, że zostają tylko lata 2010 do 2018 i to niepełne. Dlatego ten zbiór danych nie będzie wykorzystany w późniejszych badaniach.
+```{r summary RATES}
+RATES$Date <- as.Date(RATES$Date)
+summary(RATES)
+count(RATES)
+RATES <- RATES %>%
+  drop_na()
+count(RATES)
+```
+
+## Ceny złota - GOLD
+Pomiary cen złota były robione codziennie od 1968 roku do 2021 dla 3 walut w godzinach porannych i popołudniowych. Najmniejszą ilość danych pustych możemy zauważyć dla dolara mierzonego w godzinach porannych, dlatego do dalszej analizy użyjemy tej kolumny. Każda z tych walut odzwierciedla kurs złota. W ten sam sposób jedynie różnią się one kursem walutowym między sobą, dlatego wybranie jednej z nich będzie najlepsze. Dodatkowo w przypadku euro jest dużo danych pustych ze względu na to, że waluta ta powstała dopiero w 1999. Wartość pusta została uzupełniona na podstawie dnia poprzedniego lub jeśli on byłby pusty następnego.
+```{r summary GOLD}
+summary(GOLD)
+GOLD$Date <- as.Date(GOLD$Date,format="%Y-%m-%d")
+GOLD <- select(GOLD, c('Date', 'USD..AM.'))
+names(GOLD)[2] <- 'USD'
+GOLD <- GOLD %>% fill(names(.),.direction="downup")
+summary(GOLD)
+gg <- ggplot(data=GOLD, aes(x=Date,y=USD)) + geom_line() 
+
+ggplotly(gg)
+```
+
+## Indeks giełdowy S&P - COMP
+W przypadku S&P Composite można zauważyć, że wartości nie było wiele i zostały one uzupełnione na podstawie poprzedniego miesiąca lub jeśli on byłby pusty to następnego. Pomiary były robione raz w miesiącu od 1871 roku z częstotliwością co miesiąc. Do późniejszej analizy zostały wybrane pomiary pochodzące od 1998 roku w górę, gdyż od tego roku pomiary zbierane były dla wartości złota.
+```{r summary COMP}
+summary(COMP)
+COMP$Year <- as.Date(COMP$Year)
+COMP <- COMP %>% filter(COMP$Year >=as.Date("1968-01-01")) %>% fill(names(.),.direction="downup")
+summary(COMP)
+gg<- ggplot(data=COMP, aes(Year)) + 
+  geom_line(aes(y = S.P.Composite, colour = "S.P.Composite")) + 
+  geom_line(aes(y = Dividend, colour = "Dividend")) + 
+  geom_line(aes(y = Earnings, colour = "Earnings")) +
+  geom_line(aes(y = CPI, colour = "CPI")) +
+  geom_line(aes(y = Long.Interest.Rate, colour = "Long.Interest.Rate")) +
+  geom_line(aes(y = Real.Price, colour = "Real.Price")) +
+  geom_line(aes(y = Real.Dividend, colour = "Real.Dividend")) +
+  geom_line(aes(y = Real.Earnings, colour = "Real.Earnings")) +
+  geom_line(aes(y = Cyclically.Adjusted.PE.Ratio, colour = "Cyclically.Adjusted.PE.Ratio")) 
+
+ggplotly(gg)
+```
+
+## Ceny bitcoina - BITCOIN
+
+Dane zawierające cenę bitcoina były zbierane od 2009 roku do 2021 z częstotliwością 1 dnia. Można zauważyć, że do dnia 2010-08-15 wartość bitcoina według wczytanych danych była równa 0. Podejrzewam, że jest to przybliżenie jego wartości wynikające z niskiej ceny w tamtym okresie lub brakiem jego mierzalnej wartości. W maju 2010 roku pewien programista zakupił 2 pizze warte około 30 dolarów za 10 000 bitcoinów, czyli bitcoin przed tamtym okresem przyjmował wartości poniżej 0,003$ za 1 bitcoina. Było to też pierwsze wykorzystanie bitcoina w celach konsumpcyjnych. Dodatkowo bitcoin został wprowadzony na giełdę w lutym 2010 roku i początkowo giełdy te nie zdobyły popularności, co także mogło mieć wpływ na te wartości. 
+
+```{r summary bitcoin}
+summary(MKPRU)
+
+```
+```{r summary bitcoin plot}
+MKPRU$Date <- as.Date(MKPRU$Date,format="%Y-%m-%d")
+gg <- ggplot(data=MKPRU, aes(x=Date,y=Value)) + geom_line() 
+
+ggplotly(gg)
+```
+
+# Korelacja między zmiennymi
+
+## Cena złota a index giełdowy S&P
+```{r correlation gold S&P}
+GOLDSP <- GOLD %>% mutate(Month = format(Date, format="%Y-%m"))
+COMPSP <- COMP %>% mutate(Month = format(Year, format="%Y-%m"))
+GOLDSP <- COMPSP %>% full_join(GOLDSP, by = "Month")
+COR_GOLDSP <- GOLDSP %>% select(-c("Year", "Date", "Month")) %>% cor(use="pairwise.complete.obs")
+corrplot(COR_GOLDSP, order = 'alphabet', number.cex=0.67, tl.cex = 0.67, addCoef.col = 'black', col = colorRampPalette(c('#E5D10A',"white","#BDE50A"))(200))
+
+```
+
+\52 z zbadanych atrybutów na 90 (bez wliczania korelacji między tymi samymi atrybutami) posiada korelacje powyżej 0.8 z czego 21 atrybutów powyżej 0.9. Zbiór atrybutów jest mocno skorelowany.
+W przypadku korelacji atrybutów z ceną złota można zauważyć, że najwiekszą korelacją cechują się atrybuty:\
+0.88 - Divident        \
+0,86 - Earnings        \
+0.83 - CPI             \
+0.83 - Real.Divident   
+
+## Cena złota a światowy wskaźnik rozwoju
+```{r correlation GOLD INDI}
+GOLDINDI <- GOLD%>%
+  mutate(Year = format(Date, "%Y")) %>%
+  group_by(Year) %>%
+  summarise(avgGOLD= mean(USD)) %>%
+  transform(Year = as.numeric(Year))
+
+INGOLD <- INDI %>% select(c("Series Name","Year","Value")) %>% mutate(Year = format(Year, format="%Y")) %>%
+  transform(Year = as.numeric(Year))
+
+
+INGOLD <- INGOLD %>% inner_join(GOLDINDI,by="Year")
+INGOLD <- INGOLD %>% select(-c("Year"))
+
+
+COR_BITCOMP <- INGOLD %>% group_by(INGOLD$Series.Name) %>% 
+  summarise(cor = cor(Value, avgGOLD))
+COR_BITCOMP_minus <- COR_BITCOMP %>% filter(COR_BITCOMP$cor < -0.9)
+COR_BITCOMP_plus <- COR_BITCOMP %>% filter(COR_BITCOMP$cor > 0.9)
+```
+
+Część światowych wskaźników rozwoju w mocnym stopniu korelują z cenami złota (korelacja powyżej 0.90 lub korelacja poniżej -0.90). Dla korelacji dodatniej jest 19 takich wskaźników a dla ujemnej 11. 
+
+```{r correlation GOLD INDI table}
+datatable(COR_BITCOMP_minus)
+datatable(COR_BITCOMP_plus)
+```
+
+## Cena złota a cena bitcoina
+Współczynnik korelacji ceny złota od ceny bitcoina dla całego zbioru wyniósł 0.4981413 dlatego pomiędzy tymi dwiema zmiennymi możemy mówić o korelacji przeciętnej bądź średniej.
+```{r correlation GOLD BITCOIN}
+GOLDBIT <- merge(x = GOLD, y = MKPRU, by = "Date", all = TRUE)
+GOLDBIT <- GOLDBIT %>%
+  drop_na()
+GOLDBIT$USD <- as.numeric(GOLDBIT$USD)
+GOLDBIT$Value <- as.numeric(GOLDBIT$Value)
+M <- cor(GOLDBIT$USD, GOLDBIT$Value, method=c("pearson", "kendall", "spearman"))
+M
+```
+Na wykresie można zauważyć, że dynamika wzrostu ceny od roku 2017 jest dużo wyższa dla bitcoina niż złota. Cena złota w latach 2009-2021 była dużo stabilniejsza niż cena bitcoina, który cechował się dużą zmiennością, stąd też wynika średnia korelacja tych atrybutów. 
+```{r correlation plot GOLD BITCOIN}
+ggplot(data=GOLDBIT, aes(Date)) + 
+  geom_line(aes(y = USD, colour = "Cena złota")) + 
+  geom_line(aes(y = Value, colour = "Cena bitcoina")) +
+  transition_reveal(Date)+
+  scale_colour_manual(values = c("blue", "red")) +
+  theme(legend.position = c(0.8, 0.9)) + 
+  ggtitle("Bitcoin i złoto") 
+  
+```
+
+## Cena bitcoina a index giełdowy S&P
+```{r correlation BITCOIN S&P}
+BITSP <- MKPRU %>% mutate(Month = format(Date, format="%Y-%m"))
+BITCOMP <- COMP %>% mutate(Month = format(Year, format="%Y-%m"))
+BITSP <- BITSP %>% full_join(BITCOMP, by = "Month")
+COR_BITSP <- BITSP %>% select(-c("Year", "Date", "Month")) %>% cor(use="pairwise.complete.obs")
+corrplot(COR_BITSP, order = 'alphabet', number.cex=0.67, tl.cex = 0.67, addCoef.col = 'black', col = colorRampPalette(c('#E5D10A',"white","#BDE50A"))(200))
+```
+
+\W przypadku korelacji atrybutów S&P między ceną bitcoina. Można zauważyć mniejszą korelacje niż pomiędzy złotem a atrybutami S&P. Najwiekszą korelacje pomiędzy Value Bitcoina a atrybutami S&P mamy dla atrybutów:\
+0.78 - S.P.Composite                 \
+0.76 - Real.Price                    \
+0.70 - Cyclically.Adjusted.PE.Ratio  
+
+## Cena bitcoina a światowy wskaźnik rozwoju
+```{r correlation BITCOIN INDI}
+BITINDI <- MKPRU%>%
+  mutate(Year = format(Date, "%Y")) %>%
+  group_by(Year) %>%
+  summarise(avgBIT= mean(Value)) %>%
+  transform(Year = as.numeric(Year))
+summary(BITINDI)
+BITCOMP <- INDI %>% select(c("Series Name","Year","Value")) %>% mutate(Year = format(Year, format="%Y")) %>%
+  transform(Year = as.numeric(Year))
+
+
+BITCOMP <- BITCOMP %>% inner_join(BITINDI,by="Year")
+BITCOMP <- BITCOMP %>% select(-c("Year"))
+
+
+COR_BITCOMP <- BITCOMP %>% group_by(BITCOMP$Series.Name) %>% 
+  summarise(cor = cor(Value, avgBIT))
+COR_BITCOMP_minus <- COR_BITCOMP %>% filter(COR_BITCOMP$cor < -0.9)
+COR_BITCOMP_plus <- COR_BITCOMP %>% filter(COR_BITCOMP$cor > 0.9)
+```
+Można zauważyć, że światowych wskaźników rozwoju w mocnym stopniu skorelowanych z cenami bitcoina jest znacząco mniej (korelacja powyżej 0.90 lub korelacja poniżej -0.90). Dla korelacji złota było ich 30 a dla bitcoina jest ich łącznie 17.
+```{r correlation BITCOIN INDI table}
+datatable(COR_BITCOMP_minus)
+datatable(COR_BITCOMP_plus)
+```
+
+# Regresor przewidujący ceny złota
+Ceny złota były bardziej skorelowane z badanymi zbiorami danych oraz zbiór danych cen złota był dużo większy niż zbiór danych bitcoina który wartości niezerowe przyjmował dopiero od 2010. Dlatego regresor zostanie zbudowany do przewidywania cen złota. Ceny złota będą przewidywane na podstawie poniższych danych:\
+S&P:\
+  - Divident\
+  - Earnings\
+  - CPI\
+  - Real.Divident\
+Światowy wskaźnik rozwoju:
+  -GDP (current US dollar)
+  -Total greenhouse gas emissions (kt of CO2 equivalent)
+  
+Wskaźniki S&P zostały wybrane na podstawie poziomu korelacji, natomiast wskaźniki światowego rozwoju wytypowane zostały spośród 30 uzyskanych. Wskaźniki te są mocno związane z produkcją dóbr, powstawaniem miast na świecie i emisją gazów cieplarnianych związanych najczęściej z rozwojem przemysłu co może wpływać na prognozy cen złota.
+## Wstępne przetworzenie danych
+```{r correlation prediction model}
+pre_COMP <- COMP %>% select("Year","Dividend","Earnings","CPI","Real.Dividend")
+pre_COMP <- pre_COMP %>% mutate(Month = format(Year, format="%Y-%m"))
+```
+```{r correlation prediction model indi}
+INDI_GDP <- INDI %>% filter(`Series Name` == "GDP (current US dollar)")
+INDI_GDP <- rename(INDI_GDP, GDP=Value)
+INDI_GDP <- INDI_GDP %>% select(c("Year", "GDP", )) %>%
+  transform(Year = as.numeric(Year))
+ggplot(INDI_GDP, aes(Year,GDP, group = 1)) +
+  geom_line() +
+  ggtitle("GPD")
+INDI_Total <- INDI %>% filter(`Series Name` == "Total greenhouse gas emissions (kt of CO2 equivalent)")
+INDI_Total <- rename(INDI_Total, GAS=Value)
+INDI_Total <- INDI_Total %>% select(c("Year", "GAS")) %>%
+  transform(Year = as.numeric(Year))
+ggplot(INDI_Total, aes(Year,GAS, group = 1)) +
+  geom_line() +
+  ggtitle("GAS")
+```
+
+```{r correlation prediction model gold}
+pre_GOLD <- GOLD %>% mutate(Month = format(Date, format="%Y-%m")) %>% group_by(Month) %>% summarise(avgGOLD= mean(USD))
+pre_COMP <- pre_COMP %>% mutate(Month = format(Year, format="%Y-%m")) 
+
+GOLD_COMB <- pre_GOLD %>% full_join(pre_COMP, by = "Month")
+GOLD_COMB <- rename(GOLD_COMB, Date=Year)
+GOLD_COMB <- GOLD_COMB %>% mutate(Year = format(Date, format="%Y")) %>% transform(Year = as.numeric(Year))
+ALL_COMB <- GOLD_COMB %>% inner_join(INDI_Total, by = "Year")
+ALL_COMB <- GOLD_COMB %>% inner_join(INDI_GDP, by = "Year")
+summary(ALL_COMB)
+```
+Po przetworzeniu i połączeniu wszystkich atrybutów powstał zbiór zawierający 612 rekordów i nie posiadający żadnych wartości pustych. 
+```{r correlation prediction remove}
+ALL_COMB <- ALL_COMB %>% select(-c("Month","Date","Year"))
+```
+## Tworzenie modelu
+Zbiór trenujący i testowy podzielono w proporcjach 75:25. A następnie wytrenowano model regresyjny randomForest.
+```{r correlation prediction train}
+smp_size <- floor(0.75 * nrow(ALL_COMB))
+train_ind <- sample(seq_len(nrow(ALL_COMB)), size = smp_size)
+trainset <- ALL_COMB[ train_ind,]
+testset  <- ALL_COMB
+predictors <- trainset %>% select(-avgGOLD) %>% as.matrix()
+output <- trainset$avgGOLD
+model <- randomForest(x = predictors, y = output,
+                      ntree = 50) # number of trees
+
+
+model
+rmse(predict(model, testset), testset$avgGOLD)
+```
+
+## Dostosowywanie modelu z wykorzystaniem careta
+```{r correlation prediction tunning}
+model_tuned <- train(avgGOLD ~ .,
+             method = "rf",
+             data = trainset,
+             ntree = 5)
+model_tuned
+ggplot(model_tuned)
+```
+
+W przypadku tuned_model wyniki są minimalnie lepsze od zwykłego modelu.
+```{r correlation prediction test}
+
+rmse(predict(model, testset), testset$avgGOLD)
+mae(predict(model, testset), testset$avgGOLD)
+rmse(predict(model_tuned$finalModel, testset), testset$avgGOLD)
+mae(predict(model_tuned$finalModel, testset), testset$avgGOLD)
+```
+## Analiza miary oceny
+Do oceny przedstawionego modelu regresji zostały użyte 2 miary oceny:\
+- RSME - pierwiastek błędu średniokwadratowego. Przedstawia on różnicę między estymatorem a warością estymowaną. W przypadku lepszego modelu przyjął on wartość 26.35187. Jest to dobry wynik gdyż ceny złota przyjmowały wartości od 34.95 aż do 1971.17.\
+- MAE - jest to średni błąd bezwzględny wyniósł on 13.19214.
+
+## Analiza ważności atrybutów
+Można zauważyć, że dla zwykłego modelu najważniejszym atrybutem było CPI z zbioru danych S&P natomiast dla modelu_tuned GPD z zbioru danych dotyczących światowych wskaźników rozwoju. Najmniejszy wpływ na uczenie modelu zwyłego miał Dividend, a dla tuned_model Earnings. Były to 2 atrybuty mocno skorelowane ze sobą.
+```{r correlation prediction waznosc}
+par(mfrow = c(1,2))
+
+varImpPlot(model, n.var = 5)
+varImpPlot(model_tuned$finalModel, n.var = 5)
+```
