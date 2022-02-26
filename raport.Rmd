@@ -21,7 +21,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Wstęp
 
-Zbiory danych zawierały bardzo dużo atrybutów, zebrane zostały na przestrzeni wielu lat i przestawiały interesujące dane. Dzięki analizie udało ustalić, że wiele atrybutów znacząco koreluje z cenami złota i na ich podstawie można stworzyć model regresji, który z dużą skutecznością jest w stanie przewidzieć ceny złota.\
+Zbiory danych zawierały bardzo dużo atrybutów dotyczących krajów, gospodarek, walut i cen. Zebrane zostały na przestrzeni wielu lat i przestawiały interesujące dane. Dzięki analizie udało ustalić, że wiele atrybutów znacząco koreluje z cenami złota jak i cenami bitcoina. Na ich podstawie można stworzyć model regresji, który z dużą skutecznością jest w stanie przewidzieć ceny złota.\
 
 Ostatecznie regresor został wytrenowany na podstawie poniższych danych:\
 S&P:\
@@ -89,14 +89,14 @@ MKPRU <- read.csv("Data pack/Bitcoin/BCHAIN-MKPRU.csv")
 # Podsumowanie danych
 
 ## Światowy wskaźnik rozwoju - INDI
-Spośród wielu krajów wybrać można by kraje posiadających największe PKB kolejno: Stany Zjednoczone, Chiny, Japonia, Niemcy oraz Wielka Brytania czy kraje posiadających najwięcej rezerw złota w tonach: Stany zjednoczone, Niemcy Włochy, Francja oraz Rosja. Kraje te powinny wywierać największy wpływ na ceny surowców dostępnych na całym świecie. Ostatecznie wybrane zostały statystyki dla całego świata, dzięki czemu naraz ujęte w analizie zostaną zarówno największe mocarstwa, jak i te drobniejsze kraje.
+Spośród wielu krajów wybrać można kraje posiadające największe PKB kolejno: Stany Zjednoczone, Chiny, Japonia, Niemcy oraz Wielka Brytania czy kraje posiadających najwięcej rezerw złota w tonach: Stany zjednoczone, Niemcy Włochy, Francja oraz Rosja. Kraje te powinny wywierać największy wpływ na ceny surowców dostępnych na całym świecie. Ostatecznie wybrane zostały statystyki dla całego świata, dzięki czemu naraz ujęte w analizie zostaną zarówno największe mocarstwa, jak i te drobniejsze kraje.
 
 ```{r presummary INDI}
 INDI <- INDI %>% 
   filter(`Country Name` %in% c("World"))
 ```
 
-Można zauważyć, że zebrane dane w wielu latach posiadają bardzo dużą ilość brakujących wartości. Uzupełnianie brakujących wartości nie byłoby proste i mogłoby spowodować zakłamanie wyników, dlatego po przekształceniu zbioru zostały usunięte rekordy, którym brakowało danych.
+Można zauważyć, że zebrane dane w wielu latach posiadają dużą ilość brakujących wartości. Uzupełnianie brakujących wartości nie byłoby proste i mogłoby spowodować zakłamanie wyników, dlatego po przekształceniu zbioru zostały usunięte rekordy w których występowały wartości puste.
 ```{r summary INDI}
 INDI <- INDI %>% 
   select(-c("Country Name","Country Code")) %>%
@@ -104,7 +104,7 @@ INDI <- INDI %>%
   mutate(Year = substr(Year, 1, 4), `Series Name` = gsub("\\$", " dollar", `Series Name`)) 
 ```
 
-Zbiór danych dodatkowo został przekształcony, aby ułatwić pracę nad nim i uzyskać przejrzystość danych
+Zbiór danych dodatkowo został przekształcony, aby ułatwić pracę nad nim i uzyskać przejrzystość danych.
 ```{r head INDI}
 INDI <- INDI %>%
   drop_na()
